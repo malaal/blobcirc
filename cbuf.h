@@ -43,15 +43,17 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
 *    data         data to read from the buffer. You will not be able to get the data length first,
 *                 so ensure the buffer is large enough
 *                 Can be NULL to remove the next item from the buffer without storing it elsewhere
-* Returns true if the data was read, false otherwise (ie: the buffer is empty).
+* Returns the number of messages on the buffer _before_ the read.
 */
-bool cbuf_read(cbuf_t *cbuf, void *data);
+uint32_t cbuf_read(cbuf_t *cbuf, void *data);
 
+/** Returns the number of data blobs in the circular buffer */
+uint32_t cbuf_count(cbuf_t *cbuf);
+
+#if 0
 /** Print a visualization of the buffer state to the screen. Looks super cool, but really for debug only. */
 void cbuf_viz(cbuf_t *cbuf);
-
-//PLACEFULDERS
-#define assert(x) x
+#endif
 
 #endif
 

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 #include "cbuf.h"
 
@@ -9,7 +10,12 @@ typedef struct
     uint8_t data[];
 } cbuf_item_t;
 
-static void write(cbuf_t *cbuf, const void *src, uint32_t len)
+/** Write data from src to the cbuf, accounting for wrap. This overwrites any data there
+ *  so we have to check in advance that the room exists for the data
+ *
+ * Results in the write index being updated after the write
+ */
+static void _write(cbuf_t *cbuf, const void *src, uint32_t len)
 {
     uint32_t wb = 0;             //Bytes read
     uint8_t *s = (uint8_t*)src;  //Source pointer
@@ -22,7 +28,12 @@ static void write(cbuf_t *cbuf, const void *src, uint32_t len)
     }
 }
 
-static void read(cbuf_t *cbuf, void* dst, uint32_t len)
+/** Read data from the cbuf to dst, account for wrap.
+ *  Dst should be large enough to hold len bytes.
+ *
+ *  Results in the read index being updated after the read
+ */
+static void _read(cbuf_t *cbuf, void* dst, uint32_t len)
 {
     uint32_t rb = 0;             //Bytes read
     uint8_t *d = (uint8_t*)dst;  //Destination pointer
@@ -65,8 +76,10 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
     //Calculate whether writing this much data would cause an overwrite
     bool would_overwrite = false;
     uint32_t next_widx = (cbuf->widx + (sizeof(cbuf_item_t) + data_len)); //We will account for wrap later on
-    bool wrap = next_widx > cbuf->len;
+    bool wrap = next_widx > cbuf->len; //True if we'd wrap around the buffer if we added this many to the index
     do {
+        //These complicated logic statements are derived from listing every possible case and keeping those that result
+        //in no overwrite. I can't figure out a way to make them smaller.
         if (    (!wrap && (cbuf->widx >= cbuf->ridx) && (next_widx > cbuf->ridx)) ||
                 (!wrap && (cbuf->widx < cbuf->ridx)  && (next_widx < cbuf->ridx)) ||
                 ( wrap && (cbuf->widx >= cbuf->ridx) && (next_widx <= (cbuf->ridx + cbuf->len)))
@@ -80,7 +93,7 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
             if (allow_overwrite)
             {
                 overwrite++;
-                //Dump the next read message off the queue and test again
+                //Dump the next read message off the queue and repeat the loop until there's no overwrite
                 cbuf_read(cbuf, NULL);
             }
             else
@@ -89,19 +102,18 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
                 return false;
             }
         }
-        // printf("%d -> %d, %d (%d)%s\n", cbuf->widx, next_widx, cbuf->ridx, (cbuf->ridx + cbuf->len),
-        //     wrap ? " wrap" : "");
     } while (would_overwrite);
 
-
     //Write the header
-    cbuf_item_t hdr;
+    cbuf_item_t hdr = {0};
     hdr.len = data_len;
-    printf("Insert %d bytes at %d, over: %d\n", hdr.len, cbuf->widx, overwrite);
-    write(cbuf, &hdr, sizeof(cbuf_item_t));
+    _write(cbuf, &hdr, sizeof(cbuf_item_t));
 
     //Write the body
-    write(cbuf, data, data_len);
+    _write(cbuf, data, data_len);
+
+    //Increment the count
+    cbuf->count++;
 
     //output
     if (count_overwrite)
@@ -112,30 +124,38 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
     return true;
 }
 
-bool cbuf_read(cbuf_t *cbuf, void *data)
+uint32_t cbuf_read(cbuf_t *cbuf, void *data)
 {
     assert(cbuf != NULL);
+    uint32_t count = cbuf->count;
 
     //Check if empty
-    if (cbuf->ridx == cbuf->widx)
+    if ((count == 0) || (cbuf->ridx == cbuf->widx))
     {
-        return false;
+        return count;
     }
 
     //Copy out the header
     cbuf_item_t item;
-    uint32_t sidx = cbuf->ridx;
-    read(cbuf, &item, sizeof(cbuf_item_t));
-    // printf("R header @%d: %d b\n", cbuf->ridx, hdr.length);
+    _read(cbuf, &item, sizeof(cbuf_item_t));
 
     //Copy the output if there's a destination
-    read(cbuf, data, item.len);
+    //read() handles a NULL data internally
+    _read(cbuf, data, item.len);
 
-    //printf("Read %d bytes at %d\n", item.len, sidx);
+    //Decrement the count
+    cbuf->count--;
 
-    return true;
+    //Return the count of messages we had _before_ the read
+    return count;
 }
 
+uint32_t cbuf_count(cbuf_t *cbuf)
+{
+    return cbuf->count;
+}
+
+#if 0
 void cbuf_viz(cbuf_t *cbuf)
 {
     assert(cbuf != NULL);
@@ -178,54 +198,5 @@ void cbuf_viz(cbuf_t *cbuf)
 
     //Draw the read pointer
     printf("%*s%c%*s\n", ridx, "", 'R', (cbuf->len - ridx - 1), "");
-}
-
-#if 0
-int main(void)
-{
-    cbuf_t CB;
-    uint8_t mem[100];
-    cbuf_init(&CB, mem, 50);
-
-    char data[32] = "data";
-    uint32_t ovw = 0;
-
-    printf("\n");
-    strcpy(&data[4], "123");
-    printf("Write: %s\n", data);
-    cbuf_write(&CB, data, strlen(data), true, &ovw);
-    cbuf_viz(&CB);
-
-    printf("\n");
-    strcpy(&data[4], "145234523452");
-    printf("Write: %s\n", data);
-    cbuf_write(&CB, data, strlen(data), true, &ovw);
-    cbuf_viz(&CB);
-
-    printf("\n");
-    strcpy(&data[4], "145");
-    printf("Write: %s\n", data);
-    cbuf_write(&CB, data, strlen(data), true, &ovw);
-    cbuf_viz(&CB);
-
-    printf("\n");
-    strcpy(&data[4], "15234523452345");
-    printf("Write: %s\n", data);
-    cbuf_write(&CB, data, strlen(data), true, &ovw);
-    cbuf_viz(&CB);
-
-    printf("\n");
-    strcpy(&data[4], "134344344");
-    printf("Write: %s\n", data);
-    cbuf_write(&CB, data, strlen(data), true, &ovw);
-    cbuf_viz(&CB);
-
-    char rdata[32];
-    while (cbuf_read(&CB, rdata))
-    {
-        printf("\n");
-        printf("Read: %s\n", rdata);
-        cbuf_viz(&CB);
-    }
 }
 #endif
