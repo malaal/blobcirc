@@ -40,17 +40,23 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
 
 /** Read a data blob from the circular buffer
 *    cbuf         pointer to the circular buffer struct
-*    data         data to read from the buffer. You will not be able to get the data length first,
-*                 so ensure the buffer is large enough
+*    data         data to read from the buffer. Use cbuf_peek_len() first to get the length of this data
 *                 Can be NULL to remove the next item from the buffer without storing it elsewhere
 * Returns the number of messages on the buffer _before_ the read.
 */
 uint32_t cbuf_read(cbuf_t *cbuf, void *data);
 
+/** Get the length of the next data blob to be read from the circular buffer
+*    cbuf         pointer to the circular buffer struct
+*    len          length of the data
+* Returns the number of messages on the buffer.
+*/
+uint32_t cbuf_peek_len(cbuf_t *cbuf, uint32_t *len);
+
 /** Returns the number of data blobs in the circular buffer */
 uint32_t cbuf_count(cbuf_t *cbuf);
 
-#if 0
+#if defined(CBUF_TEST)
 /** Print a visualization of the buffer state to the screen. Looks super cool, but really for debug only. */
 void cbuf_viz(cbuf_t *cbuf);
 #endif

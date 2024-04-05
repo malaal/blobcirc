@@ -49,6 +49,27 @@ static void _read(cbuf_t *cbuf, void* dst, uint32_t len)
     }
 }
 
+/** Peek at data from the cbuf to dst, account for wrap
+ *
+ *  Does NOT update the read index.
+ */
+static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
+{
+    uint32_t rb = 0;             //Bytes read
+    uint8_t *d = (uint8_t*)dst;  //Destination pointer
+    uint32_t pidx = cbuf->ridx;
+    while (rb < len)
+    {
+        if (d)
+        {
+            *d = cbuf->buf[pidx];
+            d++;
+        }
+        pidx = (pidx + 1) % cbuf->len;
+        rb++;
+    }
+}
+
 void cbuf_init(cbuf_t *cbuf, uint8_t *mem, uint32_t len)
 {
     assert(cbuf != NULL);
@@ -150,12 +171,36 @@ uint32_t cbuf_read(cbuf_t *cbuf, void *data)
     return count;
 }
 
+uint32_t cbuf_peek_len(cbuf_t *cbuf, uint32_t *len)
+{
+    assert(cbuf != NULL);
+    uint32_t count = cbuf->count;
+
+    //Check if empty
+    if ((count == 0) || (cbuf->ridx == cbuf->widx))
+    {
+        return count;
+    }
+
+    //Copy out the header
+    cbuf_item_t item;
+    _peek(cbuf, &item, sizeof(cbuf_item_t));
+
+    if (len)
+    {
+        *len = item.len;
+    }
+
+    //Return the count of messages we have now
+    return count;
+}
+
 uint32_t cbuf_count(cbuf_t *cbuf)
 {
     return cbuf->count;
 }
 
-#if 0
+#if defined(CBUF_TEST)
 void cbuf_viz(cbuf_t *cbuf)
 {
     assert(cbuf != NULL);
@@ -181,8 +226,8 @@ void cbuf_viz(cbuf_t *cbuf)
         //read out the data to get the start and end indices
         cbuf_item_t item;
         uint32_t item_idx = W * copy.ridx / copy.len;
-        read(&copy, &item, sizeof(cbuf_item_t));
-        read(&copy, NULL, item.len);
+        _read(&copy, &item, sizeof(cbuf_item_t));
+        _read(&copy, NULL, item.len);
         uint32_t end_idx = W * copy.ridx / copy.len;
 
         //Draw the data on the line

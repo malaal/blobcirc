@@ -82,8 +82,11 @@ int main(void)
     // _debug_message(0, "bytes");
 
     debug_message_t msg;
-    while (cbuf_read(&cbuf, &msg))
+    uint32_t len;
+    while(cbuf_peek_len(&cbuf, &len))
     {
+        printf("Length to read: %d\n", len);
+        cbuf_read(&cbuf, &msg);
         printf("%s\n", msg.message);
         cbuf_viz(&cbuf);
     }
