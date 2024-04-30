@@ -8,7 +8,7 @@
 #include "cbuf.h"
 
 #define MESSAGE_HEADER_MAX_LEN (32)
-#define DEBUG_MESSAGE_MAX_LEN (128)
+#define DEBUG_MESSAGE_MAX_LEN (300)
 #define MESSAGE_Q_LEN (256)
 
 // Length of a full message is the header + the user's message + \r\n + \0
@@ -57,10 +57,18 @@ void _debug_message(debug_level_t level, const char *fmt, ...) {
     msg.hdr.fracsec = 0;
 
     uint32_t count_overwrite = 0;
-    cbuf_write(&cbuf, &msg, sizeof(debug_header_t) + strlen(msg.message) + 1, true, &count_overwrite);
+    bool res = cbuf_write(&cbuf, &msg, sizeof(debug_header_t) + strlen(msg.message) + 1, true, &count_overwrite);
 
-    printf("Enqueued a message of %lu bytes (overwrote %d)\n", sizeof(debug_header_t) + strlen(msg.message) + 1, count_overwrite);
-    cbuf_viz(&cbuf);
+    if (res)
+    {
+        printf("Enqueued a message of %lu bytes (overwrote %d)\n", sizeof(debug_header_t) + strlen(msg.message) + 1, count_overwrite);
+        cbuf_viz(&cbuf);
+    }
+    else
+    {
+        printf("Failed to enqueue a message of %lu bytes\n", sizeof(debug_header_t) + strlen(msg.message) + 1);
+    }
+
 }
 
 int main(void)
@@ -68,6 +76,8 @@ int main(void)
     printf("Message queue is %lu bytes\n", sizeof(mbuf));
     init();
 
+    _debug_message(0, "bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet,bytes 1 lorem ipsum dolor sit amet"
+        "bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet, bytes 1 lorem ipsum dolor sit amet,bytes 1 lorem ipsum dolor sit amet");
     _debug_message(0, "bytes 0");
     _debug_message(0, "bytes 1 lorem ipsum dolor sit amet");
     _debug_message(0, "bytes 2");
@@ -80,6 +90,17 @@ int main(void)
     // _debug_message(0, "bytes");
     // _debug_message(0, "bytes");
     // _debug_message(0, "bytes");
+
+    printf("stream\n");
+    cbuf_open(&cbuf, true, NULL);
+    cbuf_viz(&cbuf);
+    cbuf_append(&cbuf, "some kind of test", 17, true, NULL);
+    cbuf_viz(&cbuf);
+    cbuf_append(&cbuf, " some kind of test string", 26, true, NULL);
+    cbuf_viz(&cbuf);
+    cbuf_close(&cbuf);
+    cbuf_viz(&cbuf);
+    printf("done\n");
 
     debug_message_t msg;
     uint32_t len;

@@ -6,7 +6,8 @@
 
 typedef struct
 {
-    uint32_t len;
+    uint32_t len: 31;
+    uint32_t closed: 1;
     uint8_t data[];
 } cbuf_item_t;
 
@@ -17,7 +18,7 @@ typedef struct
  */
 static void _write(cbuf_t *cbuf, const void *src, uint32_t len)
 {
-    uint32_t wb = 0;             //Bytes read
+    uint32_t wb = 0;             //Bytes written
     uint8_t *s = (uint8_t*)src;  //Source pointer
     while (wb < len)
     {
@@ -57,7 +58,7 @@ static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
 {
     uint32_t rb = 0;             //Bytes read
     uint8_t *d = (uint8_t*)dst;  //Destination pointer
-    uint32_t pidx = cbuf->ridx;
+    uint32_t pidx = cbuf->ridx;  //Temporary read pointer
     while (rb < len)
     {
         if (d)
@@ -67,6 +68,46 @@ static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
         }
         pidx = (pidx + 1) % cbuf->len;
         rb++;
+    }
+}
+
+/** Peek at data from the cbuf to dst, account for wrap, at the specified index
+ *
+ *  Does NOT update the read index.
+ */
+static void _peek_at(cbuf_t *cbuf, uint32_t idx, void* dst, uint32_t len)
+{
+    uint32_t rb = 0;             //Bytes read
+    uint8_t *d = (uint8_t*)dst;  //Destination pointer
+    uint32_t pidx = idx;  //Temporary read pointer
+    while (rb < len)
+    {
+        if (d)
+        {
+            *d = cbuf->buf[pidx];
+            d++;
+        }
+        pidx = (pidx + 1) % cbuf->len;
+        rb++;
+    }
+}
+
+
+/** Poke data from src to cbuf, accounting for wrap, at the specified index
+ *
+ *  Does NOT update the write index.
+ */
+static void _poke_at(cbuf_t *cbuf, uint32_t idx, const void *src, uint32_t len)
+{
+    uint32_t wb = 0;             //Bytes written
+    uint8_t *s = (uint8_t*)src;  //Source pointer
+    uint32_t pidx = idx;         //Temporary write pointer
+    while (wb < len)
+    {
+        cbuf->buf[pidx] = *s;
+        s++;
+        pidx = (pidx + 1) % cbuf->len;
+        wb++;
     }
 }
 
@@ -81,19 +122,8 @@ void cbuf_init(cbuf_t *cbuf, uint8_t *mem, uint32_t len)
     cbuf->buf   = mem;
 }
 
-bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite)
+bool _make_space(cbuf_t *cbuf, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite)
 {
-    assert(cbuf != NULL);
-
-    //Count of data items overwritten during insertion
-    uint32_t overwrite = 0;
-
-    //Ensure we're not writing more than is possible
-    if ((sizeof(cbuf_item_t) + data_len) >= (cbuf->len - 1))
-    {
-        return false;
-    }
-
     //Calculate whether writing this much data would cause an overwrite
     bool would_overwrite = false;
     uint32_t next_widx = (cbuf->widx + (sizeof(cbuf_item_t) + data_len)); //We will account for wrap later on
@@ -113,7 +143,7 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
             would_overwrite = true;
             if (allow_overwrite)
             {
-                overwrite++;
+                *count_overwrite++;
                 //Dump the next read message off the queue and repeat the loop until there's no overwrite
                 cbuf_read(cbuf, NULL);
             }
@@ -125,9 +155,38 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
         }
     } while (would_overwrite);
 
+    return true;
+}
+
+bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite)
+{
+    assert(cbuf != NULL);
+
+    //Count of data items overwritten during insertion
+    uint32_t overwrite = 0;
+
+    //Ensure we don't have a buffer open already
+    if (cbuf->open)
+    {
+        return false;
+    }
+
+    //Ensure we're not writing more than is possible
+    if ((sizeof(cbuf_item_t) + data_len) >= (cbuf->len - 1))
+    {
+        return false;
+    }
+
+    //Make space for the buffer
+    if (!_make_space(cbuf, data_len, allow_overwrite, &overwrite))
+    {
+        return false;
+    }
+
     //Write the header
     cbuf_item_t hdr = {0};
     hdr.len = data_len;
+    hdr.closed = true;
     _write(cbuf, &hdr, sizeof(cbuf_item_t));
 
     //Write the body
@@ -143,6 +202,107 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
     }
 
     return true;
+}
+
+bool cbuf_open(cbuf_t *cbuf, bool allow_overwrite, uint32_t *count_overwrite)
+{
+    //Count of data items overwritten during insertion
+    uint32_t overwrite = 0;
+
+    //Ensure we don't have a buffer open already
+    if (cbuf->open)
+    {
+        return false;
+    }
+
+    //Open the buffer
+    cbuf->open = true;
+
+    //Make space for the buffer
+    if (!_make_space(cbuf, sizeof(cbuf_item_t), allow_overwrite, &overwrite))
+    {
+        return false;
+    }
+
+    //Write the header
+    cbuf_item_t hdr = {0};
+    hdr.len = 0;
+    hdr.closed = false;
+    cbuf->whidx = cbuf->widx;
+    _write(cbuf, &hdr, sizeof(cbuf_item_t));
+
+    //output
+    if (count_overwrite)
+    {
+        *count_overwrite = overwrite;
+    }
+}
+
+bool cbuf_close(cbuf_t *cbuf)
+{
+    //Ensure we do have a buffer open already
+    if (!cbuf->open)
+    {
+        return false;
+    }
+
+    //Read the header
+    cbuf_item_t hdr = {0};
+    _peek_at(cbuf, cbuf->whidx, &hdr, sizeof(cbuf_item_t));
+    hdr.closed = true;
+
+    //Write the header (now closed)
+    _poke_at(cbuf, cbuf->whidx, &hdr, sizeof(cbuf_item_t));
+
+    //Increment the count
+    cbuf->count++;
+
+    //Close the buffer
+    cbuf->open = false;
+
+    return true;
+}
+
+bool cbuf_append(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite)
+{
+    //Count of data items overwritten during insertion
+    uint32_t overwrite = 0;
+
+    //Ensure we do have a buffer open already
+    if (!cbuf->open)
+    {
+        return false;
+    }
+
+    //Read the open header
+    cbuf_item_t hdr = {0};
+    _peek_at(cbuf, cbuf->whidx, &hdr, sizeof(cbuf_item_t));
+
+    //Ensure we're not writing more than is possible
+    if ((sizeof(cbuf_item_t) + data_len) >= (cbuf->len - hdr.len - 1))
+    {
+        return false;
+    }
+
+    //Make space for the buffer
+    if (!_make_space(cbuf, data_len, allow_overwrite, &overwrite))
+    {
+        return false;
+    }
+
+    //Write the body
+    _write(cbuf, data, data_len);
+
+    //Update the header
+    printf("Appending %d to buffer of %d\n", data_len, hdr.len);
+    hdr.len += data_len;
+    _poke_at(cbuf, cbuf->whidx, &hdr, sizeof(cbuf_item_t));
+
+    //output
+    if (count_overwrite)
+    {
+        *count_overwrite = overwrite;
+    }
 }
 
 uint32_t cbuf_read(cbuf_t *cbuf, void *data)

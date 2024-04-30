@@ -19,6 +19,8 @@ typedef struct {
     uint32_t count;     //Count of items in the buffer
     uint32_t len;       //Length of buffer (in bytes)
     uint8_t *buf;       //Pointer to buffer memory
+    bool     open;      //True if there's an open buffer already
+    uint32_t whidx;     //Write header index (for currently open buffer)
 } cbuf_t;
 
 /** Intialize a circular buffer struct.
@@ -52,6 +54,20 @@ uint32_t cbuf_read(cbuf_t *cbuf, void *data);
 * Returns the number of messages on the buffer.
 */
 uint32_t cbuf_peek_len(cbuf_t *cbuf, uint32_t *len);
+
+bool cbuf_open(cbuf_t *cbuf, bool allow_overwrite, uint32_t *count_overwrite);
+
+/** Appends data to the open. You can use this to (say) fill the buffer bytewise by a port
+*    cbuf         pointer to the circular buffer struct
+*    data         data to write to the buffer
+*    data_len     length of the data to write, in bytes
+*    allow_overwrite    set true if the write operation can overwrite old data to write new data
+*    count_overwrite    returns the number of old messages erased to make room for the new data
+* Returns true if the data was written, false otherwise.
+*/
+bool cbuf_append(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite);
+
+bool cbuf_close(cbuf_t *cbuf);
 
 /** Returns the number of data blobs in the circular buffer */
 uint32_t cbuf_count(cbuf_t *cbuf);
