@@ -285,27 +285,31 @@ uint32_t cbuf_count(cbuf_t *cbuf)
 #if defined(CBUF_ALLOW_PARTIAL)
 bool cbuf_open(cbuf_t *cbuf, bool allow_overwrite, uint32_t *count_overwrite)
 {
-    cbuf->hidx = cbuf->widx;
-
-    //Write the header
-    bool res = cbuf_write(cbuf, NULL, 0, allow_overwrite, count_overwrite);
-    if (res)
+    bool res = false;
+    if (!cbuf->open)
     {
-        //Write succeeded. Mark the new header as "open"
-        cbuf_item_t item = {.open = 1, .len = 0};
-        _poke_at(cbuf, &item, sizeof(item), cbuf->hidx);
+        cbuf->hidx = cbuf->widx;
 
-        //Decrement the count (cbuf_write increases it)
-        //TODO: better way to do this
-        cbuf->count--;
+        //Write the header
+        bool res = cbuf_write(cbuf, NULL, 0, allow_overwrite, count_overwrite);
+        if (res)
+        {
+            //Write succeeded. Mark the new header as "open"
+            cbuf_item_t item = {.open = 1, .len = 0};
+            _poke_at(cbuf, &item, sizeof(item), cbuf->hidx);
 
-        //Now that the header is written, mark the blob as open
-        cbuf->open = true;
-    }
-    else
-    {
-        //Failed to write (likely because an overwrite would be required; close and return failure)
-        cbuf->open = false;
+            //Decrement the count (cbuf_write increases it)
+            //TODO: better way to do this
+            cbuf->count--;
+
+            //Now that the header is written, mark the blob as open
+            cbuf->open = true;
+        }
+        else
+        {
+            //Failed to write (likely because an overwrite would be required; close and return failure)
+            cbuf->open = false;
+        }
     }
 
     return res;
