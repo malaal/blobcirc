@@ -10,7 +10,17 @@
  *
  *  Data is written and read into the buffer as arbitrary-length items. The whole item must be
  *  written or read at once. Ensure your pointers have sufficient space to do so.
+ *
+ *  To provide thread-safety, the caller of these functions should wrap them in appropriate mutexes.
  */
+
+/** If CBUF_ALLOW_PARTIAL is defined, the cbuf also allows a secondary mode where the buffer can be
+ * "opened" for multiple sequential writes that aren't the full buffer size. This would allow using
+ * it similar to a standard circular buffer, while still maintaining the arbitrary-length behavior.
+ * When "open" reads are still allowed but buffer-writes are blocked. cbuf_read will not read the
+ * currently open buffer
+ */
+//#define CBUF_ALLOW_PARTIAL
 
 /** Structure that holds the metadata for a circular buffer */
 typedef struct {
@@ -19,6 +29,10 @@ typedef struct {
     uint32_t count;     //Count of items in the buffer
     uint32_t len;       //Length of buffer (in bytes)
     uint8_t *buf;       //Pointer to buffer memory
+#if defined(CBUF_ALLOW_PARTIAL)
+    uint8_t  open;      //True if the cbuf is open for partial writes
+    uint32_t hidx;      //Index to the header of the open item
+#endif
 } cbuf_t;
 
 /** Intialize a circular buffer struct.
@@ -59,6 +73,17 @@ uint32_t cbuf_count(cbuf_t *cbuf);
 #if defined(CBUF_TEST)
 /** Print a visualization of the buffer state to the screen. Looks super cool, but really for debug only. */
 void cbuf_viz(cbuf_t *cbuf);
+#endif
+
+#if defined(CBUF_ALLOW_PARTIAL)
+/** Open a blob for multiple sequential writes using cbuf_write.
+ *  Returns true if successful
+ */
+bool cbuf_open(cbuf_t *cbuf, bool allow_overwrite, uint32_t *count_overwrite);
+
+/** Close the currently open buffer and mark is as a complete blob.
+ *  Returns true if successful */
+bool cbuf_close(cbuf_t *cbuf);
 #endif
 
 #endif

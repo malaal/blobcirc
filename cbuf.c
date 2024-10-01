@@ -4,11 +4,21 @@
 
 #include "cbuf.h"
 
+/** Header structure placed in front of every blob */
 typedef struct
 {
-    uint32_t len;
+#if defined(CBUF_ALLOW_PARTIAL)
+    uint32_t len  : 31;     //Length of the blob
+    uint32_t open : 1;      //Set to 1 if this blob is currently open for sequential writes
+#else
+    uint32_t len;           //Length of the blob
+#endif
     uint8_t data[];
 } cbuf_item_t;
+
+#if defined(CBUF_ALLOW_PARTIAL)
+#define CBUF_OPEN_FLAG  0x80000000u
+#endif
 
 /** Write data from src to the cbuf, accounting for wrap. This overwrites any data there
  *  so we have to check in advance that the room exists for the data
@@ -57,7 +67,7 @@ static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
 {
     uint32_t rb = 0;             //Bytes read
     uint8_t *d = (uint8_t*)dst;  //Destination pointer
-    uint32_t pidx = cbuf->ridx;
+    uint32_t pidx = cbuf->ridx;  //Peek index
     while (rb < len)
     {
         if (d)
@@ -70,6 +80,47 @@ static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
     }
 }
 
+#if defined(CBUF_ALLOW_PARTIAL)
+/** Peek at data from the cbuf to dst, account for wrap
+ *
+ *  Does NOT update the read index.
+ */
+static void _peek_at(cbuf_t *cbuf, void* dst, uint32_t len, uint32_t at)
+{
+    uint32_t rb = 0;             //Bytes read
+    uint8_t *d = (uint8_t*)dst;  //Destination pointer
+    uint32_t pidx = at;          //Peek index
+    while (rb < len)
+    {
+        if (d)
+        {
+            *d = cbuf->buf[pidx];
+            d++;
+        }
+        pidx = (pidx + 1) % cbuf->len;
+        rb++;
+    }
+}
+
+/** Overwrite data in the cbuf at a specific index, accouting for wrap
+ *
+ *  Does NOT update the write index.
+ */
+static void _poke_at(cbuf_t *cbuf, const void* src, uint32_t len, uint32_t at)
+{
+    uint32_t wb = 0;             //Bytes written
+    uint8_t *s = (uint8_t*)src;  //Source pointer
+    uint32_t pidx = at;          //Poke index
+    while (wb < len)
+    {
+        cbuf->buf[pidx] = *s;
+        s++;
+        pidx = (pidx + 1) % cbuf->len;
+        wb++;
+    }
+}
+#endif
+
 void cbuf_init(cbuf_t *cbuf, uint8_t *mem, uint32_t len)
 {
     assert(cbuf != NULL);
@@ -79,6 +130,10 @@ void cbuf_init(cbuf_t *cbuf, uint8_t *mem, uint32_t len)
     cbuf->count = 0;
     cbuf->len   = len;
     cbuf->buf   = mem;
+#if defined(CBUF_ALLOW_PARTIAL)
+    cbuf->open  = false;
+    cbuf->hidx  = 0;
+#endif
 }
 
 bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_overwrite, uint32_t *count_overwrite)
@@ -113,9 +168,17 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
             would_overwrite = true;
             if (allow_overwrite)
             {
-                overwrite++;
                 //Dump the next read message off the queue and repeat the loop until there's no overwrite
-                cbuf_read(cbuf, NULL);
+                if (cbuf_read(cbuf, NULL))
+                {
+                    overwrite++;
+                }
+                else
+                {
+                    //If tried to read and failed it's probably because a partial write has exceeded the buffer
+                    //size and the code won't overwrite the same open buffer being written
+                    return false;
+                }
             }
             else
             {
@@ -125,16 +188,35 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
         }
     } while (would_overwrite);
 
-    //Write the header
-    cbuf_item_t hdr = {0};
-    hdr.len = data_len;
-    _write(cbuf, &hdr, sizeof(cbuf_item_t));
+#if defined(CBUF_ALLOW_PARTIAL)
+    //If we're open, update the length in the existing header
+    if (cbuf->open)
+    {
+        cbuf_item_t item;
+        _peek_at(cbuf, &item, sizeof(item), cbuf->hidx);
+        item.len += data_len;
+        _poke_at(cbuf, &item, sizeof(item), cbuf->hidx);
+    }
+    else
+#endif
+    {
+        //Write the new header
+        cbuf_item_t hdr = {0};
+        hdr.len = data_len;
+        _write(cbuf, &hdr, sizeof(cbuf_item_t));
+    }
 
     //Write the body
     _write(cbuf, data, data_len);
 
-    //Increment the count
-    cbuf->count++;
+#if defined(CBUF_ALLOW_PARTIAL)
+    //Don't increment the count if we're open already
+    if (!cbuf->open)
+#endif
+    {
+        //Increment the count
+        cbuf->count++;
+    }
 
     //output
     if (count_overwrite)
@@ -149,6 +231,7 @@ uint32_t cbuf_read(cbuf_t *cbuf, void *data)
 {
     assert(cbuf != NULL);
     uint32_t count = cbuf->count;
+    cbuf_item_t item;
 
     //Check if empty
     if ((count == 0) || (cbuf->ridx == cbuf->widx))
@@ -157,7 +240,6 @@ uint32_t cbuf_read(cbuf_t *cbuf, void *data)
     }
 
     //Copy out the header
-    cbuf_item_t item;
     _read(cbuf, &item, sizeof(cbuf_item_t));
 
     //Copy the output if there's a destination
@@ -182,7 +264,7 @@ uint32_t cbuf_peek_len(cbuf_t *cbuf, uint32_t *len)
         return count;
     }
 
-    //Copy out the header
+    //Peek at the header
     cbuf_item_t item;
     _peek(cbuf, &item, sizeof(cbuf_item_t));
 
@@ -200,23 +282,74 @@ uint32_t cbuf_count(cbuf_t *cbuf)
     return cbuf->count;
 }
 
+#if defined(CBUF_ALLOW_PARTIAL)
+bool cbuf_open(cbuf_t *cbuf, bool allow_overwrite, uint32_t *count_overwrite)
+{
+    cbuf->hidx = cbuf->widx;
+
+    //Write the header
+    bool res = cbuf_write(cbuf, NULL, 0, allow_overwrite, count_overwrite);
+    if (res)
+    {
+        //Write succeeded. Mark the new header as "open"
+        cbuf_item_t item = {.open = 1, .len = 0};
+        _poke_at(cbuf, &item, sizeof(item), cbuf->hidx);
+
+        //Decrement the count (cbuf_write increases it)
+        //TODO: better way to do this
+        cbuf->count--;
+
+        //Now that the header is written, mark the blob as open
+        cbuf->open = true;
+    }
+    else
+    {
+        //Failed to write (likely because an overwrite would be required; close and return failure)
+        cbuf->open = false;
+    }
+
+    return res;
+}
+
+bool cbuf_close(cbuf_t *cbuf)
+{
+    if (cbuf->open)
+    {
+        //Clear the open flag from the header
+        cbuf_item_t item;
+        _peek_at(cbuf, &item, sizeof(item), cbuf->hidx);
+        item.open = 0;
+        _poke_at(cbuf, &item, sizeof(item), cbuf->hidx);
+        //Increment the count on the buffer and indicate closed
+        cbuf->count++;
+        cbuf->open = false;
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+#endif /* defined(CBUF_ALLOW_PARTIAL) */
+
 #if defined(CBUF_TEST)
 void cbuf_viz(cbuf_t *cbuf)
 {
     assert(cbuf != NULL);
-    const uint32_t W = 100; //Width of characters to display
+    const uint32_t W = 120; //Width of characters to display
     uint32_t widx = W * cbuf->widx / cbuf->len;
     uint32_t ridx = W * cbuf->ridx / cbuf->len;
     char v[W + 1];
 
     //Draw the Write pointer
-    printf("%*s%c%*s\n", widx, "", 'W', (cbuf->len - widx - 1), "");
+    //printf("%*s%c%*s\n", widx, "", 'W', (cbuf->len - widx - 1), "");
+    printf("%*s%c (%d)\n", widx, "", 'W', cbuf->widx);
 
     //Draw a horizontal line
-    memset(v, '-', 100);
+    memset(v, '-', W);
     v[W] = '\0';
 
-    //Draw a represenation of the buffer contents
+    //Draw a represenation of the buffer contents on the horizontal line
     //Make a copy of the cbuf struct so we can read it non-destructively
     cbuf_t copy = *cbuf;
     while (1)
@@ -227,21 +360,42 @@ void cbuf_viz(cbuf_t *cbuf)
         cbuf_item_t item;
         uint32_t item_idx = W * copy.ridx / copy.len;
         _read(&copy, &item, sizeof(cbuf_item_t));
-        _read(&copy, NULL, item.len);
-        uint32_t end_idx = W * copy.ridx / copy.len;
 
-        //Draw the data on the line
-        for (uint32_t idx=item_idx; idx != end_idx; idx = (idx + 1) % W)
+#if defined(CBUF_ALLOW_PARTIAL)
+        if (item.open)
         {
-            v[idx] = '=';
+            //Item is open and being written
+            uint32_t end_idx = W * copy.widx / copy.len;
+
+            //Draw the data on the line
+            for (uint32_t idx=item_idx; idx != end_idx; idx = (idx + 1) % W)
+            {
+                v[idx] = '*';
+            }
+            v[item_idx] = '|';
+
+            //Done reading if we're at the open blob
+            break;
         }
-        v[item_idx] = '|';
+        else
+#endif
+        {
+            _read(&copy, NULL, item.len);
+            uint32_t end_idx = W * copy.ridx / copy.len;
+
+            //Draw the data on the line
+            for (uint32_t idx=item_idx; idx != end_idx; idx = (idx + 1) % W)
+            {
+                v[idx] = '=';
+            }
+            v[item_idx] = '|';
+        }
 
         if (copy.ridx == cbuf->ridx) break;
     }
     printf("%s\n", v);
 
     //Draw the read pointer
-    printf("%*s%c%*s\n", ridx, "", 'R', (cbuf->len - ridx - 1), "");
+    printf("%*s%c (%d)\n", ridx, "", 'R', cbuf->ridx);
 }
 #endif

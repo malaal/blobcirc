@@ -7,3 +7,6 @@ fit in this max. This latter option is a huge waste of space if you're allocatin
 In this implementation, a fixed size buffer is used to hold data circularly in blobs. When a new blob is written that would cause an overrun
 of existing data, one or more entire blobs are deleted to make the necessary space. The write function can be set to return an error
 instead of overwrite.
+
+Also included is a mode (enabled by `CBUF_ALLOW_PARTIAL`) where a blob can be opened and written to in multiple sequential writes. It
+will still be read as a single blob. This is useful, for example, to hold incoming serial data until an EOL delimiter is received.
