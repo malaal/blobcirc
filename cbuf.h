@@ -60,6 +60,14 @@ bool cbuf_write(cbuf_t *cbuf, const void *data, uint32_t data_len, bool allow_ov
 */
 uint32_t cbuf_read(cbuf_t *cbuf, void *data);
 
+/** Reads some or all of the next data blob from the circular buffer, WITHOUT consuming the blob
+*    cbuf         pointer to the circular buffer struct
+*    data         data to read from the buffer. Use cbuf_peek_len() first to get the max length of this data
+*    len          (in) length of the data buffer / (out) actual number of bytes written
+* Returns the number of messages on the buffer, including the one being peeked at
+*/
+uint32_t cbuf_peek(cbuf_t *cbuf, void *data, uint32_t *len);
+
 /** Get the length of the next data blob to be read from the circular buffer
 *    cbuf         pointer to the circular buffer struct
 *    len          length of the data

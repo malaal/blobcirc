@@ -80,7 +80,6 @@ static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
     }
 }
 
-#if defined(CBUF_ALLOW_PARTIAL)
 /** Peek at data from the cbuf to dst, account for wrap
  *
  *  Does NOT update the read index.
@@ -102,6 +101,7 @@ static void _peek_at(cbuf_t *cbuf, void* dst, uint32_t len, uint32_t at)
     }
 }
 
+#if defined(CBUF_ALLOW_PARTIAL)
 /** Overwrite data in the cbuf at a specific index, accouting for wrap
  *
  *  Does NOT update the write index.
@@ -250,6 +250,32 @@ uint32_t cbuf_read(cbuf_t *cbuf, void *data)
     cbuf->count--;
 
     //Return the count of messages we had _before_ the read
+    return count;
+}
+
+uint32_t cbuf_peek(cbuf_t *cbuf, void *data, uint32_t *len)
+{
+    assert(cbuf != NULL);
+    assert(data != NULL);
+    assert(len  != NULL);
+    uint32_t count = cbuf->count;
+
+    //Check if empty
+    if ((count == 0) || (cbuf->ridx == cbuf->widx))
+    {
+        return count;
+    }
+
+    //Peek at the header
+    cbuf_item_t item;
+    _peek(cbuf, &item, sizeof(cbuf_item_t));
+
+    //Peek the requested data into the output buffer
+    uint32_t rlen = (*len < item.len) ? *len : item.len;
+    uint32_t pidx = (cbuf->ridx + sizeof(cbuf_item_t)) % cbuf->len;
+    _peek_at(cbuf, data, rlen, pidx);
+
+    *len = rlen;
     return count;
 }
 
