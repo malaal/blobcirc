@@ -20,6 +20,41 @@ typedef struct
 #define CBUF_OPEN_FLAG  0x80000000u
 #endif
 
+/** Generalized write helper. Writes to the circular buffer at given index, and
+ *  increments the index.
+ */
+static void _generic_write(cbuf_t *cbuf, const void *src, uint32_t len, uint32_t *at)
+{
+    uint32_t wb = 0;             //Bytes read
+    uint8_t *s = (uint8_t*)src;  //Source pointer
+    while (wb < len)
+    {
+        cbuf->buf[*at] = *s;
+        s++;
+        *at = (*at + 1) % cbuf->len;
+        wb++;
+    }
+}
+
+/** Generalized read helper. Reads to the circular buffer at given index, and
+ *  increments the index.
+ */
+static void _generic_read(cbuf_t *cbuf, void* dst, uint32_t len, uint32_t *at)
+{
+    uint32_t rb = 0;             //Bytes read
+    uint8_t *d = (uint8_t*)dst;  //Destination pointer
+    while (rb < len)
+    {
+        if (d)
+        {
+            *d = cbuf->buf[*at];
+            d++;
+        }
+        *at = (*at + 1) % cbuf->len;
+        rb++;
+    }
+}
+
 /** Write data from src to the cbuf, accounting for wrap. This overwrites any data there
  *  so we have to check in advance that the room exists for the data
  *
@@ -27,15 +62,7 @@ typedef struct
  */
 static void _write(cbuf_t *cbuf, const void *src, uint32_t len)
 {
-    uint32_t wb = 0;             //Bytes read
-    uint8_t *s = (uint8_t*)src;  //Source pointer
-    while (wb < len)
-    {
-        cbuf->buf[cbuf->widx] = *s;
-        s++;
-        cbuf->widx = (cbuf->widx + 1) % cbuf->len;
-        wb++;
-    }
+    _generic_write(cbuf, src, len, &cbuf->widx);
 }
 
 /** Read data from the cbuf to dst, account for wrap.
@@ -45,79 +72,39 @@ static void _write(cbuf_t *cbuf, const void *src, uint32_t len)
  */
 static void _read(cbuf_t *cbuf, void* dst, uint32_t len)
 {
-    uint32_t rb = 0;             //Bytes read
-    uint8_t *d = (uint8_t*)dst;  //Destination pointer
-    while (rb < len)
-    {
-        if (d)
-        {
-            *d = cbuf->buf[cbuf->ridx];
-            d++;
-        }
-        cbuf->ridx = (cbuf->ridx + 1) % cbuf->len;
-        rb++;
-    }
+    _generic_read(cbuf, dst, len, &cbuf->ridx);
 }
 
-/** Peek at data from the cbuf to dst, account for wrap
- *
- *  Does NOT update the read index.
- */
-static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
-{
-    uint32_t rb = 0;             //Bytes read
-    uint8_t *d = (uint8_t*)dst;  //Destination pointer
-    uint32_t pidx = cbuf->ridx;  //Peek index
-    while (rb < len)
-    {
-        if (d)
-        {
-            *d = cbuf->buf[pidx];
-            d++;
-        }
-        pidx = (pidx + 1) % cbuf->len;
-        rb++;
-    }
-}
-
-/** Peek at data from the cbuf to dst, account for wrap
+/** Peek at data from the cbuf at a specific index, accounting for wrap
  *
  *  Does NOT update the read index.
  */
 static void _peek_at(cbuf_t *cbuf, void* dst, uint32_t len, uint32_t at)
 {
-    uint32_t rb = 0;             //Bytes read
-    uint8_t *d = (uint8_t*)dst;  //Destination pointer
-    uint32_t pidx = at;          //Peek index
-    while (rb < len)
-    {
-        if (d)
-        {
-            *d = cbuf->buf[pidx];
-            d++;
-        }
-        pidx = (pidx + 1) % cbuf->len;
-        rb++;
-    }
+    uint32_t pidx = at;
+    _generic_read(cbuf, dst, len, &pidx);
 }
 
+/** Peek at data from the cbuf to dst, account for wrap
+ *  Begins read at the current read index
+ *
+ *  Does NOT update the read index.
+ */
+static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
+{
+    _peek_at(cbuf, dst, len, cbuf->ridx);
+}
+
+
 #if defined(CBUF_ALLOW_PARTIAL)
-/** Overwrite data in the cbuf at a specific index, accouting for wrap
+/** Overwrite data in the cbuf at a specific index, accounting for wrap
  *
  *  Does NOT update the write index.
  */
 static void _poke_at(cbuf_t *cbuf, const void* src, uint32_t len, uint32_t at)
 {
-    uint32_t wb = 0;             //Bytes written
-    uint8_t *s = (uint8_t*)src;  //Source pointer
-    uint32_t pidx = at;          //Poke index
-    while (wb < len)
-    {
-        cbuf->buf[pidx] = *s;
-        s++;
-        pidx = (pidx + 1) % cbuf->len;
-        wb++;
-    }
+    uint32_t pidx = at;
+    _generic_write(cbuf, src, len, &pidx);
 }
 #endif
 
