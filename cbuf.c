@@ -92,7 +92,8 @@ static void _peek_at(cbuf_t *cbuf, void* dst, uint32_t len, uint32_t at)
  */
 static void _peek(cbuf_t *cbuf, void* dst, uint32_t len)
 {
-    _peek_at(cbuf, dst, len, cbuf->ridx);
+    uint32_t pidx = cbuf->ridx;
+    _peek_at(cbuf, dst, len, pidx);
 }
 
 
